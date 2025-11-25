@@ -188,7 +188,7 @@ def train(cfg: DictConfig) -> None:
         wandb.init(
             project=cfg.wandb_project,
             config=OmegaConf.to_container(cfg, resolve=True),
-            entity=cfg.wandb_entity,
+            # entity line removed so it defaults to your account
             name=f"FM_{cfg.data.dataset}"
         )
         try:
