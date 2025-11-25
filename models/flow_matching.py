@@ -9,7 +9,11 @@ from einops import rearrange
 
 # Import original backbone and components
 from models.unet_pvc import PVCNN2Unet
-from models.pvcnn import PVCData, LinearAttention, Attention, SharedMLP, Swish
+# 'Attention' comes from models.modules
+from models.modules import Attention
+# The rest usually come from pvcnn (or modules via pvcnn)
+from models.pvcnn import PVCData, LinearAttention, SharedMLP, Swish
+
 
 class PVCNN2UnetFM(PVCNN2Unet):
     """
