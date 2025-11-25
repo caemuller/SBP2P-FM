@@ -318,19 +318,51 @@ def get_dataset(
 
 def create_collate_fn(aligner):
     def align_patches(data):
-        aligned_data = {}
+        # 'data' is a list of dictionaries returned by __getitem__
+        
+        # Initialize lists to store batch elements
+        noisy_list = []
+        clean_list = []
+        center_list = []
+        scale_list = []
+        sem_list = []
+
         for d in data:
-            clean = d["hr_points"]
-            noisy = d["lr_points"]
-            dis, alignment = aligner(noisy.unsqueeze(0), clean.unsqueeze(0), 0.01, 100)
-            clean = clean[alignment]
-            aligned_data["lr_points"] = noisy
-            aligned_data["hr_points"] = clean
-            aligned_data["center"] = d["center"]
-            aligned_data["scale"] = d["scale"]
-            sem_list = [d["semantic_emb"] for d in data]
-            aligned_data["semantic_emb"] = torch.stack(sem_list)
-        return aligned_data
+            # --- FIX: Access keys that match __getitem__ return ---
+            noisy = d["noisy_points"]  # Was d["lr_points"] causing KeyError
+            clean = d["clean_points"]  # Was d["hr_points"] causing KeyError
+            center = d["center"]
+            scale = d["scale"]
+            sem = d["semantic_emb"]    # Don't forget the semantic embedding
+
+            # --- EMD Alignment Logic ---
+            # If an aligner is provided, align clean points to noisy points
+            if aligner is not None:
+                # aligner expects (B, N, 3), so we unsqueeze to (1, N, 3)
+                dis, alignment = aligner(noisy.unsqueeze(0), clean.unsqueeze(0), 0.01, 100)
+                # Reorder clean points based on alignment
+                clean = clean[alignment[0].long()]
+
+            # Append to lists
+            noisy_list.append(noisy)
+            clean_list.append(clean)
+            center_list.append(center)
+            scale_list.append(scale)
+            sem_list.append(sem)
+
+        # --- Stack and Return ---
+        return {
+            "x_cond": torch.stack(noisy_list),   # Noisy input (Conditioning)
+            "x_start": torch.stack(noisy_list),  # Source (x1 for Flow Matching)
+            "x_gt": torch.stack(clean_list),     # Target (x0 / Clean)
+            "center": torch.stack(center_list),
+            "scale": torch.stack(scale_list),
+            "semantic_emb": torch.stack(sem_list),
+            
+            # Keep legacy keys just in case other utils need them
+            "noisy_points": torch.stack(noisy_list),
+            "clean_points": torch.stack(clean_list),
+        }
 
     return align_patches
 
