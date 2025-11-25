@@ -92,10 +92,10 @@ def train(cfg: DictConfig) -> None:
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds) if cfg.distribution_type == "multi" else None
 
-    # Collate function (Need the one that handles semantic embeddings)
+    # Collate function
+    # We pass None for aligner because we moved alignment to the training loop
     if cfg.data.dataset == "PUNet":
-        aligner = emd_module.emdModule()
-        collate_fn = create_collate_fn(aligner) # Imports from punet_fm
+        collate_fn = create_collate_fn(None) 
     else:
         collate_fn = None
 
@@ -216,19 +216,23 @@ def train(cfg: DictConfig) -> None:
             next_batch = next(train_iter)
             next_batch = to_cuda(next_batch, cfg.local_rank)
 
-            data = next_batch
-            
+            data = next_batch            
             # Helper to split data into clean/noisy/etc
-            data_batch = get_data_batch(batch=data, cfg=cfg, align_fn=align_fn)
-            
-            x_gt = data_batch["x_gt"]       # Clean Data (x0)
-            x_cond = data_batch["x_cond"]   # Conditioning Input
-            x_start = data_batch["x_start"] # Noisy Source (x1)
+            x_gt_raw = data["x_gt"]     
+            x_cond = data["x_cond"]      
+            x_start = data["x_start"]    
+            semantic_emb = data["semantic_emb"]
 
-            # --- NEW: Extract Semantic Embedding ---
             # Ensure your punet_fm.py collate_fn stacks these into the batch
             semantic_emb = data["semantic_emb"].cuda()
-            # ---------------------------------------
+
+
+            if align_fn is not None:
+                # align_fn was defined earlier in train_fm.py
+                # It expects (B, N, 3) inputs
+                x_gt = align_fn(x_cond, x_gt_raw) 
+            else:
+                x_gt = x_gt_raw
 
             # Flow Matching Loss
             # Flow from x1 (Noisy) -> x0 (Clean)
