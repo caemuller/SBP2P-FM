@@ -175,10 +175,21 @@ def train(cfg: DictConfig) -> None:
 
         @torch.no_grad()
         def align_fn(noisy, clean):
+            # noisy: (B, N, 3)
+            # clean: (B, N, 3)
+            
+            # 1. Get alignment indices (B, N)
             align_idxs = emd_align(noisy, clean).detach().long()
-            align_idxs = align_idxs.unsqueeze(1).expand(-1, 3, -1)
-            clean = torch.gather(clean, -1, align_idxs)
-            return clean
+            
+            # 2. Expand indices to match the data shape (B, N, 3)
+            # We want to reorder the points (dim 1), so we expand along the coords (dim 2)
+            align_idxs_expanded = align_idxs.unsqueeze(-1).expand(-1, -1, 3)
+            
+            # 3. Gather along the point dimension (dim=1)
+            # Previous incorrect code was gathering along dim=-1
+            clean_aligned = torch.gather(clean, 1, align_idxs_expanded)
+            
+            return clean_aligned
     else:
         align_fn = None
 
