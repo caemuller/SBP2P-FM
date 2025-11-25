@@ -5,7 +5,6 @@ from typing import Dict, Optional
 from tqdm import tqdm
 from einops import rearrange
 
-# Correct Imports
 from models.modules import Attention
 from models.pvcnn import PVCData, LinearAttention, SharedMLP, Swish
 from models.unet_pvc import PVCNN2Unet
@@ -18,8 +17,6 @@ class PVCNN2UnetFM(PVCNN2Unet):
     def __init__(self, cfg: Dict):
         super().__init__(cfg)
         
-        # CLIP embedding dim is 512, Time Embed dim is usually 64
-        # We project 512 -> 64 to match dimensions
         self.semantic_proj = nn.Sequential(
             nn.Linear(512, self.embed_dim),
             nn.SiLU(),
@@ -27,7 +24,6 @@ class PVCNN2UnetFM(PVCNN2Unet):
         )
 
     def forward(self, x, t, x_cond=None, semantic_emb=None):
-        # Handle conditioning concatenation
         if x_cond is not None:
             x = torch.cat([x, x_cond], dim=1)
 
@@ -36,7 +32,6 @@ class PVCNN2UnetFM(PVCNN2Unet):
         coords = x[:, : self.input_dim, :].contiguous()
         features = x[:, self.input_dim :, :].contiguous()
 
-        # Embed features if needed
         if self.embed_feats is not None:
             if self.extra_feature_channels == 0:
                 features = self.embed_feats(coords)
@@ -45,7 +40,6 @@ class PVCNN2UnetFM(PVCNN2Unet):
 
         data = PVCData(coords=coords, features=coords)
 
-        # Global embedding
         if self.global_pnet is not None:
             global_feature = self.global_pnet(data)
             data.cond = global_feature
@@ -58,30 +52,24 @@ class PVCNN2UnetFM(PVCNN2Unet):
         out_features_list = []
         in_features_list.append(features)
 
-        # --- MODIFICATION: INJECT SEMANTICS INTO TIME EMBEDDING ---
+        # --- SEMANTIC INJECTION ---
         time_emb = None
         if t is not None:
             if t.ndim == 0 and not len(t.shape) == 1:
                 t = t.view(1).expand(B)
             
-            # 1. Get standard Time Embedding (B, EmbedDim)
             t_emb_val = self.embedf(self.get_timestep_embedding(t, device))
             
-            # 2. Inject Semantic Embedding if present
             if semantic_emb is not None:
-                # Project (B, 512) -> (B, EmbedDim)
                 s_emb_val = self.semantic_proj(semantic_emb)
-                # Add them together
                 t_emb_val = t_emb_val + s_emb_val
             
-            # 3. Expand to nodes (B, EmbedDim, N)
             time_emb = t_emb_val[:, :, None].expand(-1, -1, N)
-        # --- END MODIFICATION ---
+        # --------------------------
 
         data.features = features
         data.time_emb = time_emb
 
-        # Standard PVCNN Forward Pass
         for i, sa_blocks in enumerate(self.sa_layers):
             in_features_list.append(data.features)
             coords_list.append(data.coords)
@@ -141,39 +129,42 @@ class ConditionalFlowMatching(nn.Module):
         x0: Clean Data (Target)
         x1: Noisy Data (Source)
         """
+        # --- FIX: Transpose inputs to (B, C, N) ---
+        # Data comes in as (B, N, 3), network wants (B, 3, N)
+        if x0.shape[-1] == 3: x0 = x0.transpose(1, 2)
+        if x1.shape[-1] == 3: x1 = x1.transpose(1, 2)
+        if x_cond is not None and x_cond.shape[-1] == 3: 
+            x_cond = x_cond.transpose(1, 2)
+        # ------------------------------------------
+
         b = x0.shape[0]
         
-        # Sample t uniform [0, 1]
         t = torch.rand(b, device=self.device).type_as(x0)
         
-        # Flow Matching Interpolation
-        # x_t = (1 - t) * x0 + t * x1
         t_expand = t.view(b, 1, 1)
         x_t = (1 - t_expand) * x0 + t_expand * x1
         
-        # Target Vector Field: u_t = x1 - x0 (Pointing towards noise)
         target_v = x1 - x0
         
-        # Predict Vector Field
-        # FIX: We pass arguments explicitly (x, t, ...)
         pred_v = self.backbone(x_t, t, x_cond=x_cond, semantic_emb=semantic_emb)
 
-        # MSE Loss
         loss = torch.mean((pred_v - target_v) ** 2)
         return loss
 
     @torch.no_grad()
     def sample(self, x1, x_cond=None, semantic_emb=None, steps=50):
-        """
-        Euler ODE Solver from t=1 (Noisy) to t=0 (Clean)
-        """
+        # --- FIX: Transpose inputs to (B, C, N) ---
+        if x1.shape[-1] == 3: x1 = x1.transpose(1, 2)
+        if x_cond is not None and x_cond.shape[-1] == 3: 
+            x_cond = x_cond.transpose(1, 2)
+        # ------------------------------------------
+
         b = x1.shape[0]
         self.backbone.eval()
         
         x_t = x1.clone()
         times = torch.linspace(1.0, 0.0, steps, device=self.device)
         
-        # dt is negative because we go 1.0 -> 0.0
         x_chain = [x_t.clone()]
 
         for i in tqdm(range(steps - 1), desc="Flow Matching Sampling"):
@@ -183,19 +174,22 @@ class ConditionalFlowMatching(nn.Module):
             
             t_tensor = torch.full((b,), t_curr, device=self.device)
             
-            # Predict v
             v_pred = self.backbone(x_t, t_tensor, x_cond=x_cond, semantic_emb=semantic_emb)
             
-            # Euler step
             x_t = x_t + v_pred * dt
-            
             x_chain.append(x_t.clone())
 
         self.backbone.train()
+        
+        # Transpose back to (B, N, 3) for saving
+        result = torch.stack(x_chain, dim=1).transpose(-1, -2) # (B, T, N, 3)
+        final = x_t.transpose(1, 2)
+        start = x1.transpose(1, 2)
+
         return {
-            "x_chain": torch.stack(x_chain, dim=1),
-            "x_pred": x_t,
-            "x_start": x1
+            "x_chain": result,
+            "x_pred": final,
+            "x_start": start
         }
 
     def forward(self, x0, x1, x_cond=None, semantic_emb=None):
