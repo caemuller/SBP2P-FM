@@ -151,12 +151,13 @@ def train(cfg: DictConfig) -> None:
     model = ConditionalFlowMatching(cfg, backbone)
     
     # Resume / Load Checkpoint
-    if cfg.resume_path:
-        ckpt = torch.load(cfg.resume_path, map_location="cpu")
+    resume_path = cfg.get("resume_path", None) # Safe access
+    
+    if resume_path is not None:
+        ckpt = torch.load(resume_path, map_location="cpu")
         cfg.start_step = ckpt["step"]
-        # load_state_dict with strict=False in case we are loading a non-FM checkpoint (optional)
         model.load_state_dict(ckpt["model_state"], strict=False)
-        logger.info("Resumed model from {}", cfg.resume_path)
+        logger.info("Resumed model from {}", resume_path)
     else:
         ckpt = None
         cfg.start_step = 0
