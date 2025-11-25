@@ -350,8 +350,15 @@ def create_collate_fn(aligner=None):
 def get_alignment_clean(aligner):
     @torch.no_grad()
     def align(noisy, clean):
-        noisy = noisy.clone().transpose(1, 2).contiguous()
-        clean = clean.clone().transpose(1, 2).contiguous()
+        # FIX: Do NOT transpose here. 
+        # The EMD module expects (B, N, 3).
+        # The input 'noisy' is already (B, N, 3).
+        
+        # Ensure contiguous memory layout just in case
+        noisy = noisy.contiguous()
+        clean = clean.contiguous()
+        
+        # Pass directly to aligner
         dis, alignment = aligner(noisy, clean, 0.01, 100)
         return alignment.detach()
 
