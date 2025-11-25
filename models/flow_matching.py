@@ -7,12 +7,9 @@ from typing import Dict, Optional
 from tqdm import tqdm
 from einops import rearrange
 
-# Import original backbone and components
+from models.modules import Attention 
+from models.pvcnn import PVCData, LinearAttention, SharedMLP, Swish  
 from models.unet_pvc import PVCNN2Unet
-# 'Attention' comes from models.modules
-from models.modules import Attention
-# The rest usually come from pvcnn (or modules via pvcnn)
-from models.pvcnn import PVCData, LinearAttention, SharedMLP, Swish
 
 
 class PVCNN2UnetFM(PVCNN2Unet):
